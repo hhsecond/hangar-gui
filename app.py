@@ -12,7 +12,7 @@ co = repo.checkout()
 try:
     repo.status()
 except AttributeError:
-    message  = 'Repository is not initialized'
+    raise RuntimeError('Repository not initialized')
 
 dtypenummap = {2: 'uint8', 7: 'int64'}
 
