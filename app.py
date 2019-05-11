@@ -1,7 +1,11 @@
 import argparse
+import ast
 from sanic import Sanic
 from sanic.response import json
 from hangar import Repository
+from PIL import Image
+import base64
+from io import BytesIO
 
 
 parser = argparse.ArgumentParser()
@@ -44,7 +48,29 @@ def get_samples_info(dset_name, limit):
 
 
 def get_one_sample(dset_name, sample_name):
-    return co.datasets[dset_name][sample_name][0].tolist()
+    return co.datasets[dset_name][sample_name].tolist()
+
+
+def compile_function(code, fn_name):
+    c = compile(code, 'postprocess', 'exec')
+    exec(c)
+    return locals()[fn_name]
+
+
+def compile_and_get_name(code):
+    c = compile(code, 'postprocess', 'exec', ast.PyCF_ONLY_AST)
+    if len(c.body) > 1:
+        return None
+    else:
+        fn_name = c.body[0].name
+        c = compile(code, 'postprocess', 'exec')
+        exec(c)
+        try:
+            locals()[fn_name]
+        except KeyError:
+            return None
+        else:
+            return fn_name
 
 
 app = Sanic()
@@ -65,8 +91,30 @@ async def samples(request, dset):
 
 @app.route("/datasets/<dset>/samples/<sample>")
 async def each_sample(request, dset, sample):
-    sample_detail = get_one_sample(dset, sample)
-    return json(sample_detail)
+    fn_name = request.args.get('function-name')
+    if fn_name:
+        code = co.metadata[fn_name]
+        fn = compile_function(code, fn_name)
+        arr = co.datasets[dset][sample]
+        out = fn(repo, arr)
+        return json({'status': 'success', 'data': out})
+    else:
+        return json({'status': 'failure'})
+
+
+@app.route("/upload-function", methods=["POST"])
+async def upload_function(request):
+    code = request.json['function']
+    fn_name = compile_and_get_name(code)
+    if fn_name:
+        co = repo.checkout(write=True)
+        co.metadata[fn_name] = code
+        co.commit()
+        co.close()
+        return json({'status': 'success'})
+    else:
+        return json({'status': 'failure'})
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8001)
