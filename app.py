@@ -73,6 +73,15 @@ def compile_and_get_name(code):
             return fn_name
 
 
+def get_previous(repo, arr):
+    co = repo.checkout()
+    data = co.datasets['MNIST']['1']
+    img = Image.fromarray(data)
+    buffered = BytesIO()
+    img.save(buffered, format="JPEG")
+    return base64.b64encode(buffered.getvalue())
+
+
 app = Sanic()
 
 
@@ -92,14 +101,15 @@ async def samples(request, dset):
 @app.route("/datasets/<dset>/samples/<sample>")
 async def each_sample(request, dset, sample):
     fn_name = request.args.get('function-name')
+    arr = co.datasets[dset][sample]
     if fn_name:
         code = co.metadata[fn_name]
         fn = compile_function(code, fn_name)
-        arr = co.datasets[dset][sample]
         out = fn(repo, arr)
         return json({'status': 'success', 'data': out})
     else:
-        return json({'status': 'failure'})
+        out = get_previous(repo, arr)
+        return json({'status': 'success', 'data': out})
 
 
 @app.route("/upload-function", methods=["POST"])
