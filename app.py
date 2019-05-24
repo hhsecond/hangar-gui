@@ -1,6 +1,7 @@
 import argparse
 import ast
 from sanic import Sanic
+from sanic_cors import CORS
 from sanic.response import json
 from hangar import Repository
 from PIL import Image
@@ -16,7 +17,9 @@ co = repo.checkout()
 try:
     repo.status()
 except AttributeError:
-    raise RuntimeError('Repository not initialized')
+    # raise RuntimeError('Repository not initialized')
+    pass
+    # TODO do this check
 
 dtypenummap = {2: 'uint8', 7: 'int64'}
 
@@ -73,16 +76,8 @@ def compile_and_get_name(code):
             return fn_name
 
 
-def get_previous(repo, arr):
-    co = repo.checkout()
-    data = co.datasets['MNIST']['1']
-    img = Image.fromarray(data)
-    buffered = BytesIO()
-    img.save(buffered, format="JPEG")
-    return base64.b64encode(buffered.getvalue())
-
-
 app = Sanic()
+CORS(app, automatic_options=True)
 
 
 @app.route("/datasets")
@@ -101,15 +96,15 @@ async def samples(request, dset):
 @app.route("/datasets/<dset>/samples/<sample>")
 async def each_sample(request, dset, sample):
     fn_name = request.args.get('function-name')
+    co = repo.checkout()
     arr = co.datasets[dset][sample]
     if fn_name:
-        code = co.metadata[fn_name]
+        code = co.metadata[f'fn_name__{fn_name}']
         fn = compile_function(code, fn_name)
         out = fn(repo, arr)
-        return json({'status': 'success', 'data': out})
+        return json([{'status': 'success', 'data': out}])
     else:
-        out = get_previous(repo, arr)
-        return json({'status': 'success', 'data': out})
+        return json([{'status': 'failure', 'message': 'NoFunctionNameProvided Error'}])
 
 
 @app.route("/upload-function", methods=["POST"])
@@ -117,14 +112,32 @@ async def upload_function(request):
     code = request.json['function']
     fn_name = compile_and_get_name(code)
     if fn_name:
-        co = repo.checkout(write=True)
-        co.metadata[fn_name] = code
-        co.commit()
-        co.close()
-        return json({'status': 'success'})
+        try:
+            co = repo.checkout(write=True)
+            co.metadata[f'fn_name__{fn_name}'] = code
+            co.commit(f'Added fn_name__{fn_name}')
+        except Exception as e:
+            ret = json([{'status': 'failure', 'message': 'FunctionNameExist Error'}])
+        finally:
+            co.close()
+        ret = json([{'status': 'success'}])
     else:
-        return json({'status': 'failure'})
+        ret = json([{'status': 'failure'}])
+    return ret
 
+
+@app.route("/get-functions")
+async def get_functions(request):
+    co = repo.checkout()
+    out = []
+    for key, val in co.metadata.items():
+        if key.startswith('fn_name__'):
+            out.append({'functionName': key[9:], 'function': val})
+    return json(out)
+
+
+app.static('/', './dist')
+app.static('/index', './dist/index.html')
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8001)
